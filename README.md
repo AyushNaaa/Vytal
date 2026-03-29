@@ -1,5 +1,2 @@
 # VitalAccess
-claudehacks
-
-
-
+claudehacks 2026
