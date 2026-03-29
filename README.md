@@ -1,10 +1,10 @@
-# VitalAccess
+# Vytal
 
-**VitalAccess** is a simple mobile health triage concept that uses a phone camera to estimate basic vitals, collects symptoms through a guided conversation, and turns everything into a plain-language health summary the user can share with a clinician.
+**Vytal** is a simple mobile health triage concept that uses a phone camera to estimate basic vitals, collects symptoms through a guided conversation, and turns everything into a plain-language health summary the user can share with a clinician.
 
 ## Core Idea
 
-A phone camera can measure heartbeat-related signals through tiny color changes in the face caused by blood flow. Using the **Presage SmartSpectra SDK**, VitalAccess captures remote photoplethysmography (rPPG) data without any wearable hardware.
+A phone camera can measure heartbeat-related signals through tiny color changes in the face caused by blood flow. Using the **Presage SmartSpectra SDK**, Vytal captures remote photoplethysmography (rPPG) data without any wearable hardware.
 
 ## How It Works
 
@@ -70,7 +70,7 @@ The app also explains why the result was given and what symptoms would mean the 
 
 ## Why It Matters
 
-VitalAccess is designed to make basic health screening:
+Vytal is designed to make basic health screening:
 
 - easier to access
 - easier to understand
@@ -79,7 +79,7 @@ VitalAccess is designed to make basic health screening:
 
 ## Tech Stack
 
-- **Presage SmartSpectra SDK** for face-based vitals estimation
+- **Custom CD Pipeline** for face-based vitals estimation
 - **Claude API** for guided symptom intake
 - **LangGraph** for agent orchestration
 - **Mobile app frontend** for capture and summary display
