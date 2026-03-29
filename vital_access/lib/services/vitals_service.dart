@@ -143,7 +143,11 @@ class CvPipelineVitalsService implements VitalsService {
   @override
   Future<void> startSession() async {
     _consecutiveFailures = 0;
-    await _dio.post('/start');
+    try {
+      await _dio.post('/start');
+    } on DioException catch (e) {
+      throw Exception('CV Pipeline /start failed ($baseUrl): ${e.message}');
+    }
   }
 
   @override

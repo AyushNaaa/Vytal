@@ -114,7 +114,7 @@ class _ScanScreenState extends State<ScanScreen>
     if (!mounted) return;
 
     if (!reachable) {
-      final useMock = await _showServerNotFoundDialog();
+      final useMock = await _showServerNotFoundDialog(baseUrl);
       if (!mounted) return;
       if (useMock) {
         _vitalsService = MockVitalsService();
@@ -123,14 +123,32 @@ class _ScanScreenState extends State<ScanScreen>
         // Retry once
         final retry = await cvService.isReachable();
         if (!mounted) return;
-        _vitalsService = retry ? cvService : MockVitalsService();
-        _usingMock = !retry;
+        if (retry) {
+          _vitalsService = cvService;
+        } else {
+          _vitalsService = MockVitalsService();
+          _usingMock = true;
+        }
       }
     } else {
       _vitalsService = cvService;
     }
 
-    await _startMeasurement();
+    try {
+      await _startMeasurement();
+    } catch (e) {
+      if (!mounted) return;
+      _vitalsService = MockVitalsService();
+      _usingMock = true;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('CV server error: $e — using demo vitals'),
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 4),
+        ),
+      );
+      await _startMeasurement();
+    }
   }
 
   Future<void> _startMeasurement() async {
@@ -255,14 +273,44 @@ class _ScanScreenState extends State<ScanScreen>
     );
   }
 
-  Future<bool> _showServerNotFoundDialog() async {
+  Future<bool> _showServerNotFoundDialog(String url) async {
     final lang = context.read<SessionProvider>().language;
     return await showDialog<bool>(
           context: context,
           barrierDismissible: false,
           builder: (_) => AlertDialog(
-            title: const Text('Vitals Server'),
-            content: Text(t(lang, 'server_not_found')),
+            title: const Text('Vitals Server Unreachable'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(t(lang, 'server_not_found')),
+                const SizedBox(height: 12),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: Colors.grey.shade100,
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Text(
+                    url,
+                    style: const TextStyle(
+                      fontFamily: 'monospace',
+                      fontSize: 12,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  'Check that:\n'
+                  '• The CV Pipeline server is running\n'
+                  '• CV_PIPELINE_URL in .env matches your device\n'
+                  '  Emulator → http://10.0.2.2:8000\n'
+                  '  Physical phone → http://<wifi-ip>:8000',
+                  style: TextStyle(fontSize: 12, color: Colors.grey),
+                ),
+              ],
+            ),
             actions: [
               TextButton(
                 onPressed: () => Navigator.pop(context, false),
@@ -275,7 +323,7 @@ class _ScanScreenState extends State<ScanScreen>
             ],
           ),
         ) ??
-        true;
+        false;
   }
 
   void _showCameraPermissionDialog() {
