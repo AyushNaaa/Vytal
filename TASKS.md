@@ -5,8 +5,9 @@
 1.1. Create a new Flutter project in the current directory (or reinitialize if already created) targeting Android and iOS.
 
 1.2. Add all required dependencies to `pubspec.yaml`:
-   - `camera` — front camera access
-   - `dio` — HTTP client for Claude API calls
+   - `camera` — front camera access for frame streaming
+   - `dio` — HTTP client for Claude API calls and CV Pipeline server communication
+   - `image` — converting camera YUV420/NV21 frames to JPEG for the CV Pipeline
    - `share_plus` — system share sheet
    - `flutter_dotenv` — environment variable management for API keys
    - `uuid` — session ID generation
@@ -15,7 +16,7 @@
    - `pdf` — PDF generation for health summary
    - `path_provider` — file system access for saving PDFs
 
-1.3. Create the folder structure:
+1.3. Create the folder structure (excluding the models folder, which Task 2 will handle):
    ```
    lib/
    ├── main.dart
@@ -23,12 +24,7 @@
    ├── config/
    │   ├── theme.dart
    │   └── constants.dart
-   ├── models/
-   │   ├── vital_scan_result.dart
-   │   ├── symptom_intake.dart
-   │   ├── triage_result.dart
-   │   ├── health_summary.dart
-   │   └── chat_message.dart
+   ├── models/  (created by Task 2)
    ├── services/
    │   ├── claude_service.dart
    │   ├── vitals_service.dart
@@ -46,7 +42,9 @@
        └── health_summary_card.dart
    ```
 
-1.4. Create a `.env` file (and add it to `.gitignore`) with a placeholder for `ANTHROPIC_API_KEY`.
+1.4. Create a `.env` file (and add it to `.gitignore`) with placeholders for:
+   - `ANTHROPIC_API_KEY` — Claude API key
+   - `CV_PIPELINE_URL=http://127.0.0.1:8000` — URL of the local CV Pipeline Python server
 
 1.5. Set up the app theme in `config/theme.dart`:
    - Define a clean, medical-feeling color palette (white/light background, teal/blue primary accent)
@@ -70,14 +68,16 @@
 
 ## 2. Data Models
 
-2.1. Create `models/chat_message.dart`:
+**Note:** Task 2 is responsible for creating the `models/` folder and all model files. This can be done in parallel with Task 1 since Task 1 skips creating the models folder.
+
+2.1. Create the `models/` folder and then create `models/chat_message.dart`:
    - Fields: `String role` (user/assistant), `String content`, `DateTime timestamp`
    - Add `toJson()` and `fromJson()` methods
 
 2.2. Create `models/vital_scan_result.dart`:
-   - Fields: `double heartRate`, `double heartRateVariability`, `double respiratoryRate`, `DateTime timestamp`
-   - Add `toJson()` method for passing to Claude API
-   - Add a `toReadableMap()` method that returns a human-friendly map like `{"Heart Rate": "88 bpm", ...}`
+   - Fields: `double heartRate` (bpm), `double hrvSdnn` (ms), `double hrvRmssd` (ms), `double respiratoryRate` (breaths/min), `String confidence` ("high"/"medium"/"low"), `double actualFps`, `DateTime timestamp`
+   - Add `toJson()` method for passing to Claude API (include all fields so the triage pipeline has full context)
+   - Add a `toReadableMap()` method that returns a human-friendly map like `{"Heart Rate": "88 bpm", "HRV (SDNN)": "42 ms", ...}`
 
 2.3. Create `models/symptom_intake.dart`:
    - Fields: `List<ChatMessage> conversation`, `String structuredSummary`
@@ -111,34 +111,220 @@
 
 ---
 
-## 4. Vitals Scan Screen
+## 4. CV Pipeline Python Server (rPPG Vitals Engine)
 
-4.1. Create `services/vitals_service.dart`:
-   - Define an abstract class `VitalsService` with a method `Future<VitalScanResult> performScan()`
-   - Create `MockVitalsService` that implements it:
-     - Waits 30 seconds (to simulate a real scan), updating a progress callback periodically
-     - Returns realistic mock vitals: HR between 65-100 bpm, HRV between 20-65 ms, RR between 12-20 breaths/min
-     - Add slight randomness so each scan looks different
-   - Create `PresageVitalsService` as a stub/placeholder that will use platform channels to call the native Presage SDK
-     - For now, have it fall back to `MockVitalsService` with a log message saying "Presage SDK not integrated, using mock"
+The vitals are extracted by a local Python/FastAPI server that uses MediaPipe FaceMesh + the CHROM algorithm to perform remote photoplethysmography (rPPG). Flutter captures camera frames and streams them to this server over HTTP. See `CV_Pipeline/CVPRD.md` for the full science and implementation spec.
 
-4.2. Create `screens/scan_screen.dart`:
-   - Initialize the front camera using the `camera` package
-   - Display a full-screen camera preview with an overlay:
-     - A face-outline guide (oval/circle overlay) centered on screen to guide the user to position their face
-     - A 30-second countdown timer displayed prominently
-     - Instructional text: "Hold your phone at arm's length and look at the camera" (in the selected language)
-   - On screen load, start the `VitalsService.performScan()` call
-   - While scanning: show a progress indicator (the countdown) and optionally animate the face guide (pulse effect)
-   - When scan completes: display vitals on screen using `VitalsDisplay` widget for 3 seconds, then navigate to `/chat`
+### 4A. Python Server Setup
 
-4.3. Create `widgets/vitals_display.dart`:
+4A.1. Create the `CV_Pipeline/` directory (if it doesn't exist) with this file structure:
+   ```
+   CV_Pipeline/
+   ├── main.py              ← FastAPI server entry point
+   ├── pipeline.py          ← Core rPPG pipeline class
+   ├── signal_processing.py ← CHROM, filters, FFT, HRV math
+   ├── face_detection.py    ← MediaPipe wrapper + ROI extraction
+   ├── session.py           ← Measurement session state management
+   ├── models.py            ← Pydantic request/response models
+   └── requirements.txt
+   ```
+
+4A.2. Create `requirements.txt` with:
+   ```
+   fastapi==0.111.0
+   uvicorn==0.29.0
+   mediapipe==0.10.14
+   opencv-python==4.9.0.80
+   numpy==1.26.4
+   scipy==1.13.0
+   pillow==10.3.0
+   websockets==12.0
+   ```
+
+4A.3. Create `models.py` with Pydantic models for:
+   - `FrameRequest`: `frame` (base64 string), `timestamp` (float)
+   - `FrameResponse`: `frame_accepted` (bool), `frames_collected` (int), `frames_needed` (int, default 900), `quality` (str: "good"/"poor"/"no_face"), `progress_percent` (float)
+   - `VitalsResponse`: `hr` (float|None), `hrv_sdnn` (float|None), `hrv_rmssd` (float|None), `rr` (float|None), `confidence` (str: "high"/"medium"/"low"), `measurement_complete` (bool), `frames_collected` (int), `actual_fps` (float)
+   - `StatusResponse`: `signal_quality_score` (float 0-1), `motion_level` (float 0-1), `face_detected` (bool), `brightness_ok` (bool), `seconds_elapsed` (float), `seconds_remaining` (float)
+   - `SessionResponse`: `session_id` (str), `status` (str)
+
+4A.4. Create `session.py` with a `MeasurementSession` class:
+   - `frame_buffer`: deque with maxlen=900 (30 sec × 30 fps)
+   - `timestamps`: deque with maxlen=900 for actual FPS calculation
+   - `rejected_frames`: int counter
+   - `start_time`: float
+   - `is_active`: bool
+   - Methods: `start()`, `add_frame(rgb_tuple, timestamp)`, `add_rejected()`, `get_actual_fps()`, `is_complete()` (returns True when frames_collected >= 900), `get_progress()` (returns 0.0–1.0)
+   - Track frame rejection rate over last 5 seconds; if >30%, flag poor signal quality
+
+4A.5. Create `face_detection.py`:
+   - Initialize MediaPipe FaceMesh (static_image_mode=False, max_num_faces=1, min_detection_confidence=0.5)
+   - Define three ROI landmark groups:
+     - Forehead: landmarks [10, 338, 297, 332]
+     - Left cheek: landmarks [234, 93, 132, 58]
+     - Right cheek: landmarks [454, 323, 361, 288]
+   - Method `extract_roi(frame) -> tuple[float, float, float] | None`:
+     - Run FaceMesh on the frame
+     - For each ROI: get pixel coordinates from landmarks, create convex hull mask, extract pixels, compute mean R, G, B
+     - Return weighted average (R, G, B) across all 3 ROIs (weighted by ROI area)
+     - Return `None` if: no face detected, face bounding box < 20% of frame area, mean brightness < 30 or > 220, fewer than 3 ROIs extracted
+   - Implement face detection caching: run MediaPipe every 3 frames, use optical flow tracking between detections to reduce per-frame cost
+   - Method `get_quality_info(frame) -> dict` returning `face_detected`, `brightness_ok`, `motion_level` (computed via `cv2.calcOpticalFlowFarneback` between consecutive frames)
+
+4A.6. Create `signal_processing.py` with these functions:
+
+   **CHROM Algorithm:**
+   - `compute_bvp(r_series, g_series, b_series) -> np.ndarray`:
+     - Normalize each channel by its temporal mean (R_norm = R / mean(R), etc.)
+     - Compute chrominance signals: Xs = 3*R_norm - 2*G_norm, Ys = 1.5*R_norm + G_norm - 1.5*B_norm
+     - Compute adaptation factor: alpha = std(Xs) / std(Ys)
+     - Return BVP_raw = Xs - alpha * Ys
+
+   **Bandpass Filter:**
+   - `bandpass_filter(signal, low_hz, high_hz, fps, order=4) -> np.ndarray`:
+     - 4th-order Butterworth, zero-phase (scipy.signal.butter + filtfilt)
+     - For cardiac BVP: low=0.75 Hz (45 bpm), high=4.0 Hz (240 bpm)
+
+   **Heart Rate (FFT):**
+   - `compute_heart_rate(bvp_filtered, fps) -> tuple[float, float]` returning (hr_bpm, confidence):
+     - Apply Hanning window
+     - Compute FFT, get power spectral density
+     - Restrict to 0.75–4.0 Hz, find dominant frequency peak
+     - HR = peak_freq × 60
+     - Validate by checking 2nd harmonic presence
+     - Confidence = peak prominence / mean PSD (HIGH if >5, MEDIUM if 2-5, LOW if <2)
+
+   **HRV (Peak Detection):**
+   - `compute_hrv(bvp_filtered, fps) -> tuple[float|None, float|None]` returning (sdnn_ms, rmssd_ms):
+     - Use `scipy.signal.find_peaks` with min height=0.5*std, min distance=fps*0.4, min prominence=0.3*std
+     - Extract RR intervals in ms from peak timestamps
+     - Reject outliers: RR < 300ms, RR > 1500ms, or RR differing from median by >20%
+     - SDNN = std(RR_intervals), RMSSD = sqrt(mean(diff(RR_intervals)²))
+     - Return None if fewer than 20 clean RR intervals
+
+   **Respiratory Rate (Hilbert envelope):**
+   - `compute_respiratory_rate(bvp_filtered, fps) -> float|None`:
+     - Compute analytical signal via scipy.signal.hilbert, extract envelope
+     - Detrend envelope, bandpass 0.15–0.5 Hz (9–30 breaths/min)
+     - FFT to find dominant frequency, RR = freq × 60
+     - Return None if window < 30 seconds
+
+   **SNR / Confidence:**
+   - `compute_snr(bvp_raw, bvp_filtered, fps) -> float`:
+     - SNR = power in 0.75–4.0 Hz band / total power
+     - Used for composite confidence scoring
+
+4A.7. Create `pipeline.py` with a `VitalsPipeline` class:
+   - Takes a `MeasurementSession` reference
+   - Method `process() -> dict`:
+     - Extract R, G, B time series from session's frame_buffer
+     - Interpolate over rejected frames (linear interpolation for None entries)
+     - Call `compute_bvp()` → `bandpass_filter()` → `compute_heart_rate()` → `compute_hrv()` → `compute_respiratory_rate()`
+     - Compute composite confidence score (4 factors, each 0.0–0.25):
+       1. SNR score (normalized)
+       2. HR harmonic validation
+       3. Frame quality ratio (valid_frames / total_frames)
+       4. HR plausibility (40-130 bpm = full score, 130-180 = partial, else 0)
+     - Return dict matching the `VitalsResponse` schema
+   - Only compute provisional HR when >= 300 frames (10 sec)
+   - Only compute final HR when >= 600 frames (20 sec)
+   - Only compute HRV and RR when >= 900 frames (30 sec)
+
+4A.8. Create `main.py` — the FastAPI server:
+   - **`POST /start`**: Reset session, clear buffer. Response: `{ session_id, status: "ready" }`
+   - **`POST /frame`**: Accept a base64-encoded JPEG frame + timestamp. Decode the frame, run face detection, extract ROI RGB values, append to session buffer. Response: `FrameResponse` with acceptance status, frame count, quality, progress
+   - **`GET /vitals`**: Run the pipeline on the current session buffer, return current best vitals estimate. Response: `VitalsResponse`
+   - **`GET /status`**: Return live signal quality metrics (signal_quality_score, motion_level, face_detected, brightness_ok, seconds_elapsed, seconds_remaining). Response: `StatusResponse`
+   - **`DELETE /session`**: Clear current session. Response: `{ cleared: true }`
+   - Configure CORS: allow all origins (`CORSMiddleware(allow_origins=["*"], allow_methods=["*"])`)
+   - Use a module-level session object + asyncio lock (single session, single measurement, no DB, no auth)
+   - Run with: `uvicorn.run(app, host="127.0.0.1", port=8000, log_level="info")`
+
+### 4B. Flutter Vitals Service (CV Pipeline Client)
+
+4B.1. Create `services/vitals_service.dart` with an abstract class and two implementations:
+
+   **Abstract class `VitalsService`:**
+   - `Future<void> startSession()` — call POST /start
+   - `Future<FrameResponse> sendFrame(CameraImage image)` — encode + send a frame
+   - `Future<VitalsResponse> getVitals()` — call GET /vitals
+   - `Future<StatusResponse> getStatus()` — call GET /status
+   - `Future<void> endSession()` — call DELETE /session
+
+   **`CvPipelineVitalsService` (primary implementation):**
+   - Constructor takes the CV Pipeline base URL from `.env` (default `http://127.0.0.1:8000`)
+   - Use `dio` for all HTTP calls
+   - `sendFrame()`:
+     - Convert `CameraImage` (YUV420 on iOS, NV21 on Android) to JPEG using the `image` package at quality=70 (~50KB per frame)
+     - Base64-encode the JPEG bytes
+     - POST to `/frame` with `{ frame: base64string, timestamp: millisecondsSinceEpoch / 1000.0 }`
+     - Use a `_processing` flag to prevent frame backpressure — skip the frame if the previous send hasn't completed yet
+   - `getVitals()` and `getStatus()`: simple GET calls, parse JSON into corresponding model classes
+
+   **`MockVitalsService` (fallback):**
+   - Does not send any frames
+   - `startSession()` starts a 30-second internal timer
+   - `getStatus()` returns simulated progress based on elapsed time
+   - `getVitals()` returns mock vitals after 30 seconds: HR 65-100 bpm, HRV 20-65 ms, RR 12-20 breaths/min (with slight randomness)
+   - Used when the CV Pipeline server is unreachable (auto-fallback after 10 failed connection attempts) or in Demo Mode
+
+4B.2. Create Dart models for the CV Pipeline responses (in `models/` or in `services/vitals_service.dart`):
+   - `FrameResponse`: `frameAccepted`, `framesCollected`, `framesNeeded`, `quality`, `progressPercent`
+   - `VitalsResponse`: `hr`, `hrvSdnn`, `hrvRmssd`, `rr`, `confidence`, `measurementComplete`, `framesCollected`, `actualFps`
+   - `StatusResponse`: `signalQualityScore`, `motionLevel`, `faceDetected`, `brightnessOk`, `secondsElapsed`, `secondsRemaining`
+   - Each with a `fromJson(Map<String, dynamic>)` factory
+
+### 4C. Scan Screen (Flutter UI)
+
+4C.1. Create `screens/scan_screen.dart`:
+   - Initialize the front camera using the `camera` package:
+     ```dart
+     CameraController(frontCamera, ResolutionPreset.medium, imageFormatGroup: ImageFormatGroup.yuv420)
+     ```
+   - On screen load:
+     1. Call `vitalsService.startSession()` to reset the CV Pipeline
+     2. Start the camera image stream: `controller.startImageStream((CameraImage image) => ...)`
+     3. For each frame, call `vitalsService.sendFrame(image)` — the service handles backpressure internally
+     4. Start two polling timers:
+        - Poll `GET /status` every 500ms → update face guidance, signal quality dots, and progress
+        - Poll `GET /vitals` every 2 seconds → update provisional vitals display once available
+   - Display a full-screen camera preview with overlays:
+     - **Face guide oval**: an elliptical overlay centered on screen. Border color changes based on signal quality:
+       - Green + pulsing animation when quality > 0.6
+       - Orange/amber (no pulse) when quality 0.4–0.6
+       - Red (no pulse) when quality < 0.4
+     - **30-second countdown timer**: driven by `StatusResponse.seconds_remaining`
+     - **Signal quality indicator**: 5 dots filled proportionally to `signal_quality_score` (green if >0.7, amber if >0.4, red otherwise)
+     - **Guidance messages** (state-driven, in the selected language):
+       - `face_detected == false` → "Position your face in the oval"
+       - `motion_level > 0.7` → "Try to stay still"
+       - `brightness_ok == false` → "Find better lighting"
+       - `progress < 0.3` → "Hold still, we're getting started"
+       - `progress < 0.7` → "Looking good, keep still"
+       - `progress < 1.0` → "Almost done..."
+       - `measurement_complete == true` → "Complete!"
+     - **Provisional vitals**: once `GET /vitals` starts returning non-null HR (after ~10 sec / 300 frames), show the HR value fading in below the countdown
+   - When `VitalsResponse.measurement_complete == true`:
+     1. Stop the camera image stream
+     2. Stop both polling timers
+     3. Map the final `VitalsResponse` into a `VitalScanResult` model (HR → heartRate, HRV SDNN → heartRateVariability, RR → respiratoryRate)
+     4. Display all vitals using the `VitalsDisplay` widget for 3 seconds
+     5. Store `VitalScanResult` in session state, navigate to `/chat`
+
+4C.2. Handle CV Pipeline server connection failure:
+   - On `startSession()` failure (server not running): show a dialog with two options:
+     - "Retry" — attempt connection again
+     - "Continue with demo vitals" — switch to `MockVitalsService` and proceed (the scan screen still shows the camera and fake countdown, but vitals are mocked)
+   - If frames fail to send mid-scan (server crash): after 10 consecutive failures, switch to mock mode with a toast "Using estimated vitals"
+
+4C.3. Create `widgets/vitals_display.dart`:
    - Takes a `VitalScanResult` as input
-   - Displays three metrics in a row of cards:
+   - Displays four metrics in a 2×2 grid of cards:
      - Heart Rate: value + "bpm" + heart icon
-     - HRV: value + "ms" + waveform icon
+     - HRV (SDNN): value + "ms" + waveform icon
      - Respiratory Rate: value + "/min" + lungs icon
-   - Each card has the value in large bold text with the unit below it
+     - Confidence: "High"/"Medium"/"Low" + checkmark/warning icon
+   - Each card has the value in large bold text with the unit and label below
    - Use a subtle entrance animation (fade in + slide up)
 
 ---
@@ -292,6 +478,12 @@
    - Provide a button to open app settings
    - Provide a "Continue without scan" option that uses mock vitals (for demo resilience)
 
+10.1b. Handle CV Pipeline server unavailability:
+   - If the Python server at `CV_PIPELINE_URL` is not reachable when starting a scan, show a dialog: "Vitals server not detected. Start the CV Pipeline server or continue with demo vitals."
+   - Options: "Retry Connection" or "Use Demo Vitals" (switches to MockVitalsService)
+   - If the server crashes mid-scan (consecutive frame send failures), gracefully switch to mock mode with a toast notification
+   - Never show raw connection errors or stack traces to the user
+
 10.2. Handle Claude API failures in `ClaudeService`:
    - Network errors: show a retry-able error with "Check your connection" message
    - API key errors (401): show "API key not configured" message
@@ -316,7 +508,8 @@
 11.4. Make sure the result screen's health summary card renders well as a screenshot (proper padding, no overflow, clean layout).
 
 11.5. Test the full flow end-to-end:
-   - Language select → Scan (mock) → Chat (5-6 questions) → Processing → Result → Share
+   - **With CV Pipeline**: Start the Python server (`cd CV_Pipeline && uvicorn main:app --port 8000`), then run: Language select → Scan (real rPPG) → Chat (5-6 questions) → Processing → Result → Share
+   - **Without CV Pipeline (mock fallback)**: Same flow but with mock vitals — verify the fallback works seamlessly
    - Verify the share text is clean and readable
    - Verify the PDF generates correctly
    - Test in at least 2 languages (English + one other)
@@ -343,3 +536,10 @@
 12.4. Run `flutter analyze` and fix any warnings or errors.
 
 12.5. Test on a physical Android device. Verify camera preview, API calls, and share sheet all work.
+
+12.6. Verify the CV Pipeline Python server:
+   - Starts cleanly with `uvicorn main:app --port 8000`
+   - Accepts frames, processes them, and returns vitals within the 30-second window
+   - Returns proper error states (`no_face`, `too_dark`, `too_much_motion`) that Flutter handles gracefully
+   - Does not crash if Flutter disconnects mid-scan (session cleanup)
+   - Pre-warm the server before a demo (first scan is slower due to lazy MediaPipe loading)

@@ -32,12 +32,14 @@ VitalAccess is a mobile health triage app that uses a phone's front camera to ca
 | `ProcessingScreen` | Loading animation while triage pipeline runs |
 | `ResultScreen` | Triage result (color-coded urgency) + plain explanation + shareable summary |
 
-### Biometric Capture — Presage SmartSpectra SDK
+### Biometric Capture — Custom CV Pipeline (rPPG)
 
-- Integrate via platform channel (native Android/iOS SDK → Flutter bridge)
-- Input: 30 seconds of front camera feed on user's face
-- Output: HR (bpm), HRV (ms), Respiratory Rate (breaths/min)
-- Fallback: If SDK integration is blocked during build, use mock vitals with a realistic camera-scanning UX so the demo still works end-to-end
+- A local Python/FastAPI server (`CV_Pipeline/`) performs remote photoplethysmography using the CHROM algorithm + MediaPipe FaceMesh
+- Flutter captures front camera frames at ~30fps, encodes them as base64 JPEG, and POSTs them to the Python server at `http://127.0.0.1:8000/frame`
+- The server accumulates 900 frames (30 sec), extracts forehead + cheek ROI RGB values, runs CHROM → bandpass → FFT/peak detection
+- Output: HR (bpm), HRV SDNN (ms), HRV RMSSD (ms), Respiratory Rate (breaths/min), confidence score, signal quality
+- Real-time feedback: Flutter polls `/status` every 500ms for face detection, motion, brightness, and progress
+- Fallback: If the Python server is unreachable, Flutter falls back to `MockVitalsService` with realistic fake vitals so the demo works end-to-end
 
 ### Symptom Intake — Claude API
 
@@ -66,8 +68,11 @@ Rather than a full LangGraph deployment (heavy for 4 hours), implement the 4-age
 ```dart
 class VitalScanResult {
   final double heartRate;       // bpm
-  final double heartRateVariability; // ms
+  final double hrvSdnn;         // ms (SDNN)
+  final double hrvRmssd;        // ms (RMSSD)
   final double respiratoryRate; // breaths/min
+  final String confidence;      // "high", "medium", "low"
+  final double actualFps;       // measured fps from CV Pipeline
   final DateTime timestamp;
 }
 
@@ -147,9 +152,10 @@ The `ResultScreen` generates a summary card containing:
 
 | Dependency | Purpose |
 |---|---|
-| `camera` (Flutter plugin) | Front camera access |
-| Presage SmartSpectra SDK | rPPG vitals extraction (native bridge) |
-| `http` / `dio` | Claude API calls |
+| `camera` (Flutter plugin) | Front camera frame capture |
+| `image` (Flutter plugin) | YUV→JPEG frame encoding for CV Pipeline |
+| CV Pipeline (Python/FastAPI) | Local rPPG vitals extraction server (CHROM + MediaPipe) |
+| `dio` | HTTP client for Claude API + CV Pipeline server calls |
 | `flutter_chat_ui` or custom | Chat interface for symptom intake |
 | `share_plus` | System share sheet |
 | `pdf` (optional) | PDF export of health summary |
@@ -159,18 +165,20 @@ The `ResultScreen` generates a summary card containing:
 ## MVP Cut Line
 
 **Must have (demo-critical):**
-- Camera scan screen with vitals display (real or mocked)
+- CV Pipeline Python server producing real rPPG vitals (HR, HRV, RR)
+- Camera scan screen streaming frames to CV Pipeline with real-time feedback
+- Mock fallback if CV Pipeline server is unavailable
 - Conversational symptom intake via Claude
 - Triage result with urgency classification
 - Shareable health summary
 - At least 2 languages working
 
 **Nice to have (if time permits):**
-- Real Presage SDK integration (vs. mock)
 - PDF export
 - Smooth animations/transitions
 - 4+ languages
 - Separate Claude calls for each pipeline agent (vs. combined prompt)
+- WebSocket frame streaming instead of HTTP POST (lower latency)
 
 ---
 
