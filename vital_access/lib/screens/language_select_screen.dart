@@ -37,6 +37,7 @@ class _LanguageSelectScreenState extends State<LanguageSelectScreen>
   late final AnimationController _controller;
   late final Animation<double> _fadeAnim;
   late final Animation<Offset> _slideAnim;
+  int _logoTapCount = 0;
 
   @override
   void initState() {
@@ -61,21 +62,21 @@ class _LanguageSelectScreenState extends State<LanguageSelectScreen>
 
   void _onLanguageTap(BuildContext context, _Language lang) {
     context.read<SessionProvider>().setLanguage(lang.code);
-    Navigator.pushNamed(context, AppRoutes.scan);
+    context.read<SessionProvider>().reset();
+    Navigator.of(context).pushReplacementNamed(AppRoutes.scan);
   }
-
-  // Long-press the logo 3 times to toggle demo mode
-  int _logoTapCount = 0;
 
   void _onLogoTap() {
     _logoTapCount++;
     if (_logoTapCount >= 3) {
       _logoTapCount = 0;
-      context.read<SessionProvider>().toggleDemoMode();
-      final isDemo = context.read<SessionProvider>().demoMode;
+      final session = context.read<SessionProvider>();
+      session.toggleDemoMode();
+      final isDemo = session.demoMode;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(isDemo ? '⚡ Demo mode ON' : 'Demo mode OFF'),
+          behavior: SnackBarBehavior.floating,
           duration: const Duration(seconds: 2),
           backgroundColor: isDemo ? AppColors.primary : AppColors.subtle,
         ),
@@ -85,6 +86,8 @@ class _LanguageSelectScreenState extends State<LanguageSelectScreen>
 
   @override
   Widget build(BuildContext context) {
+    final session = context.watch<SessionProvider>();
+
     return Scaffold(
       backgroundColor: AppColors.background,
       body: SafeArea(
@@ -98,11 +101,11 @@ class _LanguageSelectScreenState extends State<LanguageSelectScreen>
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   const SizedBox(height: 56),
-                  _buildHeader(),
+                  _buildHeader(session),
                   const SizedBox(height: 48),
                   _buildLanguageLabel(),
                   const SizedBox(height: 16),
-                  Expanded(child: _buildLanguageGrid()),
+                  Expanded(child: _buildLanguageGrid(session)),
                   _buildDisclaimer(),
                   const SizedBox(height: 24),
                 ],
@@ -114,7 +117,7 @@ class _LanguageSelectScreenState extends State<LanguageSelectScreen>
     );
   }
 
-  Widget _buildHeader() {
+  Widget _buildHeader(SessionProvider session) {
     return GestureDetector(
       onTap: _onLogoTap,
       child: Column(
@@ -122,18 +125,43 @@ class _LanguageSelectScreenState extends State<LanguageSelectScreen>
         children: [
           Row(
             children: [
-              Container(
-                width: 44,
-                height: 44,
-                decoration: BoxDecoration(
-                  color: AppColors.primary,
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: const Icon(
-                  Icons.favorite_rounded,
-                  color: Colors.white,
-                  size: 24,
-                ),
+              Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  Container(
+                    width: 44,
+                    height: 44,
+                    decoration: BoxDecoration(
+                      color: AppColors.primary,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: const Icon(
+                      Icons.favorite_rounded,
+                      color: Colors.white,
+                      size: 24,
+                    ),
+                  ),
+                  if (session.demoMode)
+                    Positioned(
+                      top: -4,
+                      right: -4,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                        decoration: BoxDecoration(
+                          color: AppColors.urgent,
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: const Text(
+                          'DEMO',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 7,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
               ),
               const SizedBox(width: 12),
               Text(
@@ -167,7 +195,7 @@ class _LanguageSelectScreenState extends State<LanguageSelectScreen>
     );
   }
 
-  Widget _buildLanguageGrid() {
+  Widget _buildLanguageGrid(SessionProvider session) {
     return GridView.builder(
       physics: const NeverScrollableScrollPhysics(),
       shrinkWrap: true,
@@ -182,6 +210,7 @@ class _LanguageSelectScreenState extends State<LanguageSelectScreen>
         final lang = _languages[index];
         return _LanguageCard(
           language: lang,
+          isSelected: session.language == lang.code,
           onTap: () => _onLanguageTap(context, lang),
           animationDelay: Duration(milliseconds: 80 * index),
           parentController: _controller,
@@ -219,12 +248,14 @@ class _LanguageSelectScreenState extends State<LanguageSelectScreen>
 
 class _LanguageCard extends StatefulWidget {
   final _Language language;
+  final bool isSelected;
   final VoidCallback onTap;
   final Duration animationDelay;
   final AnimationController parentController;
 
   const _LanguageCard({
     required this.language,
+    required this.isSelected,
     required this.onTap,
     required this.animationDelay,
     required this.parentController,
@@ -273,11 +304,17 @@ class _LanguageCardState extends State<_LanguageCard>
       onTap: widget.onTap,
       child: ScaleTransition(
         scale: _scaleAnim,
-        child: Container(
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 200),
           decoration: BoxDecoration(
-            color: AppColors.surface,
+            color: widget.isSelected
+                ? AppColors.primary.withAlpha(15)
+                : AppColors.surface,
             borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: AppColors.border),
+            border: Border.all(
+              color: widget.isSelected ? AppColors.primary : AppColors.border,
+              width: widget.isSelected ? 2 : 1,
+            ),
             boxShadow: [
               BoxShadow(
                 color: Colors.black.withAlpha(10),
@@ -291,9 +328,17 @@ class _LanguageCardState extends State<_LanguageCard>
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Text(
-                widget.language.flag,
-                style: const TextStyle(fontSize: 28),
+              Row(
+                children: [
+                  Text(
+                    widget.language.flag,
+                    style: const TextStyle(fontSize: 28),
+                  ),
+                  const Spacer(),
+                  if (widget.isSelected)
+                    const Icon(Icons.check_circle_rounded,
+                        color: AppColors.primary, size: 18),
+                ],
               ),
               const SizedBox(height: 10),
               Text(
