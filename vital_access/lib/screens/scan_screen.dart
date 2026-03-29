@@ -97,6 +97,14 @@ class _ScanScreenState extends State<ScanScreen>
   }
 
   Future<void> _initVitalsService() async {
+    // Respect demo mode toggled from the language screen
+    if (context.read<SessionProvider>().demoMode) {
+      _vitalsService = MockVitalsService();
+      _usingMock = true;
+      await _startMeasurement();
+      return;
+    }
+
     final baseUrl =
         dotenv.env['CV_PIPELINE_URL'] ?? 'http://127.0.0.1:8000';
 
@@ -427,7 +435,13 @@ class _ScanScreenState extends State<ScanScreen>
               ),
             )
           else
-            const SizedBox(width: 48),
+            TextButton(
+              onPressed: _switchToMock,
+              child: const Text(
+                'Demo',
+                style: TextStyle(color: Colors.white60, fontSize: 13),
+              ),
+            ),
         ],
       ),
     );
