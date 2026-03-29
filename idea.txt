@@ -1,0 +1,68 @@
+VitalAccess — Simple Breakdown
+The Core Insight (One Sentence)
+Your phone camera can measure your heartbeat. The Presage SmartSpectra SDK (which you already used in Lucid) detects tiny color changes in your face caused by blood flow — no hardware needed. That's the whole unlock.
+
+How It Actually Works, Layer by Layer
+Layer 1 — Biometric Capture (Presage SDK)
+User holds their phone up, faces the camera for 30 seconds. The SDK analyzes rPPG (remote photoplethysmography) — it reads micro-fluctuations in skin color from blood pumping through facial capillaries. Output:
+
+Heart Rate (HR)
+Heart Rate Variability (HRV)
+Respiratory Rate
+
+No wearable. No oximeter. Just a $50 Android phone.
+Layer 2 — Symptom Collection (Claude API, Conversational)
+After the scan, Claude runs a guided symptom intake — NOT a free-text dump. It asks structured, branching questions like a nurse would:
+
+"Where is the pain?"
+"Does it get worse when you breathe deeply?"
+"How long has this been happening?"
+
+Multi-language, plain language, works for someone who's never seen a doctor form before.
+Layer 3 — The LangGraph Pipeline (4 Agents)
+Vitals Interpreter → Symptom Assessor → Triage Agent → Explainer Agent
+AgentWhat It DoesVitals InterpreterTakes HR/HRV/RR, compares against clinical baselines for age/sex. "HR of 102 in a 45-year-old woman = mildly elevated, possible fever/stress/cardiac"Symptom AssessorStructured differential reasoning. Maps symptom clusters to clinical patterns. "Chest tightness + elevated HR + shortness of breath = flag for cardiac or respiratory"Triage AgentFuses vitals context + symptom assessment → one of 4 urgency levelsExplainer AgentRewrites everything at a 6th-grade reading level in the user's language
+Layer 4 — Output
+A printable/shareable health summary the user shows a doctor:
+
+Vitals snapshot
+Symptoms reported
+Triage classification
+Plain-language explanation
+Timestamp + session ID
+
+
+The Full User Flow
+[1] Open app → select language
+        ↓
+[2] "Hold phone at arm's length, look at camera"
+    → 30-second face scan
+    → Vitals appear on screen (HR: 88bpm, HRV: 42ms, RR: 16/min)
+        ↓
+[3] Conversational symptom intake
+    Claude: "Do you have any pain right now?"
+    User: "Yes, chest"
+    Claude: "Is it sharp or more like pressure?"
+    → ~5-8 questions, branching based on answers
+        ↓
+[4] LangGraph pipeline runs (takes ~10-15 seconds)
+    → 4 agents fire in sequence
+        ↓
+[5] Triage result displayed:
+    🟡 "Schedule a visit within 48 hours"
+    Plain explanation of why
+    What to watch for that would escalate it
+        ↓
+[6] Health summary generated
+    → Can screenshot, print, or share via WhatsApp
+    → User walks into clinic and SHOWS it to the doctor
+
+Why This Wins
+The demo is the pitch. You scan a judge's face live. Vitals appear in 30 seconds. You walk through 6 questions. A triage result comes out. They feel what a community health worker in rural Ghana or a Somali immigrant in Kitchener would feel using this. That's not a slide — that's a product.
+The "no hardware" angle is a conversation-stopper. Every other health AI hack has some gimmick device. You have nothing but software and a camera that's already in 6 billion pockets.
+Technical depth is undeniable. Four-agent LangGraph pipeline + rPPG biometric integration + structured clinical reasoning + multilingual output + document generation. That's a real system, not a GPT wrapper with a nice UI.
+Ethics is built into the architecture, not bolted on. The Triage Agent literally cannot output "you have X disease." It outputs urgency classifications. The Explainer Agent explicitly says "this is not a diagnosis." Judges who push on safety concerns get a technical answer, not a verbal disclaimer.
+The impact number lands immediately. 3.6 billion people. No equipment. One phone. Done.
+
+The One Thing You Cannot Mess Up
+Framing. Every demo line, every slide, every agent output must say triage, not diagnosis. The moment a judge hears "it told me I had a heart condition," you lose. The moment they hear "it told a community health worker in a refugee camp that this patient needed to see a doctor today" — you win. That framing difference is everything.
